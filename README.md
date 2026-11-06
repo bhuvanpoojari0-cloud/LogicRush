@@ -196,3 +196,4 @@ Run the 1,000,000 keys recovery benchmark:
 node tests/benchmark_1m.js
 ```
 *Result*: Recovers 1,000,000 keys with full CRC validation in **1.79 seconds** ($< 2.0\text{s}$ limit).
+

@@ -201,3 +201,23 @@ Start by analysing the entire PDF and presenting the proposed architecture. Do n
 ```text
 do it and give me the final project
 ```
+
+---
+
+### Entry 3
+- **Tool**: Google Antigravity / Gemini 3.8 Flash
+- **Timestamp**: 2026-11-06T12:35:18+05:30
+- **Prompt**:
+```text
+how can i check it is working
+```
+
+---
+
+### Entry 4
+- **Tool**: Google Antigravity / Gemini 3.8 Flash
+- **Timestamp**: 2026-11-06T12:46:37+05:30
+- **Prompt**:
+```text
+give me the pdf of this coding explaination how it works ge me everything in that by preparing the pdf
+```
