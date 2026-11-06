@@ -1,0 +1,76 @@
+flowchart TD
+    subgraph Client ["Client Interface & Concurrency Control"]
+        API["Client API: put, get, del, batch, dump, check, serve"]
+        MUTEX["Global Mutex & Advisory FileLock (src/lock.js)"]
+        API --> MUTEX
+    end
+
+    subgraph MemoryIndex ["In-Memory State"]
+        INDEX["In-Memory Hash Index: Map(Key -> [valOffset, valLen])"]
+    end
+
+    subgraph WritePath ["Write Path & Write Ordering Sequence"]
+        DF_CHECK["Step 1: Disk-Full Guard (fileSize + recordBytes <= maxBytes)"]
+        APPEND_ITEMS["Step 2: writeSync(fd, Record/Batch Items)"]
+        FSYNC_1["Step 3: fsyncSync(fd) (Flush items to media)"]
+        WRITE_COMMIT["Step 4: writeSync(fd, BATCH_COMMIT marker)"]
+        FSYNC_2["Step 5: fsyncSync(fd) (Seal commit marker)"]
+        UPDATE_IDX["Step 6: Update In-Memory Index"]
+        EMIT_ACK["Step 7: Emit ACK <op-id> to stdout"]
+
+        MUTEX --> DF_CHECK
+        DF_CHECK -->|Pass| APPEND_ITEMS
+        APPEND_ITEMS --> FSYNC_1
+        FSYNC_1 --> WRITE_COMMIT
+        WRITE_COMMIT --> FSYNC_2
+        FSYNC_2 --> UPDATE_IDX
+        UPDATE_IDX --> EMIT_ACK
+        UPDATE_IDX -.-> INDEX
+    end
+
+    subgraph StorageLayout ["On-Disk Authoritative File Layout"]
+        FILE_HDR["16-Byte Header:\nMagic: 'KVDB001\\0' (8B) | Version: 1 (4B) | Reserved (4B)"]
+        REC_PREFIX["18-Byte Record Prefix:\nMagic: 0xAA (1B) | Type: uint8 (1B) | TxId: uint64 (8B) | PayloadLen: uint32 (4B) | CRC32: uint32 (4B)"]
+        REC_PAYLOAD["Variable Payload:\nKeyLen: uint16 (2B) | ValLen: uint32 (4B) | Key: [KeyLen] | Value: [ValLen]"]
+        COMMIT_PAYLOAD["8-Byte Commit Payload:\nOpCount: uint32 (4B) | BatchChecksum: uint32 (4B)"]
+
+        FILE_HDR --- REC_PREFIX
+        REC_PREFIX --- REC_PAYLOAD
+        REC_PAYLOAD --- COMMIT_PAYLOAD
+    end
+
+    subgraph RecoveryRoutine ["Crash Recovery Flow (open / _recoverSync)"]
+        REC_START["open(path) Called"]
+        CLEAN_TMP["Handle half-done compaction: unlink leftover .compact.tmp"]
+        OPEN_FILE["Open authoritative file with 'r+' mode"]
+        VAL_HDR["Read & Validate 16-Byte Header Magic & Version"]
+        SCAN_LOG["Scan records sequentially using 8 MB stream chunk buffer"]
+        CHK_CRC["Verify Record Magic 0xAA & Zero-Allocation IEEE 802.3 CRC32"]
+        APPLY_OR_DISCARD{"Is Record Valid & Batch Committed?"}
+        TRUNCATE_TAIL["Torn tail / uncommitted items detected -> ftruncateSync(fd, lastValidCommittedOffset) + fsyncSync(fd)"]
+        READY["Populate In-Memory Index -> Ready in < 2 seconds for 1M keys"]
+
+        REC_START --> CLEAN_TMP
+        CLEAN_TMP --> OPEN_FILE
+        OPEN_FILE --> VAL_HDR
+        VAL_HDR --> SCAN_LOG
+        SCAN_LOG --> CHK_CRC
+        CHK_CRC --> APPLY_OR_DISCARD
+        APPLY_OR_DISCARD -->|Yes| READY
+        APPLY_OR_DISCARD -->|No / Corrupted Tail| TRUNCATE_TAIL
+        TRUNCATE_TAIL --> READY
+        READY -.-> INDEX
+    end
+
+    subgraph CompactionRoutine ["Crash-Safe Compaction Flow (compact)"]
+        COMPACT_START["compact() called under Mutex"]
+        WRITE_TMP["Write live index entries to .compact.tmp"]
+        FSYNC_TMP["fsyncSync(compactFd) + closeSync(compactFd)"]
+        SWAP_FILE["Atomic Swap: renameSync(.compact.tmp, dbPath)"]
+        REOPEN["Reopen dbPath & rebuild compacted index"]
+
+        COMPACT_START --> WRITE_TMP
+        WRITE_TMP --> FSYNC_TMP
+        FSYNC_TMP --> SWAP_FILE
+        SWAP_FILE --> REOPEN
+    end
